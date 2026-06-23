@@ -1,0 +1,33 @@
+{
+  "_doc": "Equivalencias manuales entre nombres solicitados (AppSheet/ProtocolosDigitales) y nombres en Planilla cobro. Clave = nombre solicitado, valor = nombre canónico en Planilla cobro. Comparación case/tilde-insensitive. Editar y volver a deployar.",
+  "T4": "T4 Total",
+  "T4 Libre": "T4 Libre común",
+  "T4L Específica canina": "T4 Libre Específica canina",
+  "Hemograma": "Hemograma completo",
+  "CD117": "IHQ CD117",
+  "Vif vilef IC": "VIF-VILEF (IC)",
+  "Vif Vilef IC": "VIF-VILEF (IC)",
+  "VIF VILEF IC": "VIF-VILEF (IC)",
+  "vIF VILEF PcR": "Vif + ViLeF (PCR)",
+  "Vif Vilef PCR": "Vif + ViLeF (PCR)",
+  "VIF VILEF PCR": "Vif + ViLeF (PCR)",
+  "Vif vilef PCR": "Vif + ViLeF (PCR)",
+  "frotis hemoparásitos": "Hemoparásitos sangre capilar (Frotis/Mycoplasma-Babesia)",
+  "Vilef Carga viral": "ViLeF (ADN proviral) + carga proviral",
+  "Vif + ViLeF (PCR)+ Micoplasmas hemotrópicos felinos: Mycoplasma haemofelis + Candidatus Mycoplasma haemominutum + Candidatus Mycoplasma turicensis (PCR)": "VIF (ADN proviral) + ViLeF (ADN proviral) + micoplasmas hemotrópicos felinos (PCR)",
+  "Citología linfoma": "Citología",
+  "_incluye_estudio_base_doc": "Estudios cobrados que 'absorben' un estudio base solicitado por el vete (no hace falta cobrar el base aparte). Clave = nombre del estudio base, valor = lista de cobrados que lo incluyen.",
+  "_incluye_estudio_base": {
+    "Histopatología": [
+      "Bazo completo",
+      "Línea mamaria completa más linfonódulo",
+      "Biopsia de piel múltiple",
+      "Necropsia",
+      "Histopatología Urgente"
+    ],
+    "Citología": [
+      "Análisis de líquido de punción: Citologia + Fisicoquímico",
+      "Análisis de líquido de punción"
+    ]
+  }
+}

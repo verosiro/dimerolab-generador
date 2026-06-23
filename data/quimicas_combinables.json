@@ -1,0 +1,25 @@
+{
+  "_doc": "Lista oficial de químicas combinables (LISTA DE PRECIOS ABRIL 2026, Detallado!D68). Cada entrada tiene un 'canonico' y una lista de 'sinonimos' (cómo puede aparecer el nombre en ProtocolosDigitales — lo que cargan los vetes). Si N solicitados (deduplicados por canónico) están acá Y Planilla cobro tiene exactamente 'N química(s)' en una fila, es match. Bilirrubinas: las 3 (directa, indirecta, total) cuentan como UNA sola química — por eso comparten canónico.",
+  "quimicas": [
+    {"canonico": "Urea", "sinonimos": ["Urea"]},
+    {"canonico": "Creatinina", "sinonimos": ["Creatinina"]},
+    {"canonico": "Proteínas", "sinonimos": ["Proteínas", "Proteínas totales"]},
+    {"canonico": "Albúmina", "sinonimos": ["Albúmina"]},
+    {"canonico": "GPT", "sinonimos": ["GPT", "GPT/ALT", "ALT", "TGP", "Transaminasa glutámico pirúvica", "Transaminasa glutámico pirúvica (GPT/ALT)"]},
+    {"canonico": "GOT", "sinonimos": ["GOT", "GOT/AST", "AST", "TGO", "Aspartato aminotransferasa", "Aspartato aminotransferasa (GOT/AST)"]},
+    {"canonico": "GGT", "sinonimos": ["GGT", "Gamma-GT", "Gamma GT"]},
+    {"canonico": "CPK", "sinonimos": ["CPK", "Creatina fosfoquinasa", "Creatina fosfoquinasa (CPK)"]},
+    {"canonico": "FAS", "sinonimos": ["FAS", "FAL", "Fosfatasa alcalina"]},
+    {"canonico": "Glucemia", "sinonimos": ["Glucemia", "Glucosa"]},
+    {"canonico": "Bilirrubinas", "sinonimos": ["Bilirrubinas", "Bilirrubina", "Bilirrubina Total", "Bilirrubina Directa", "Bilirrubina Indirecta"]},
+    {"canonico": "Colesterol total", "sinonimos": ["Colesterol total", "Colesterol", "Colesterol Total"]},
+    {"canonico": "Triglicéridos", "sinonimos": ["Triglicéridos"]},
+    {"canonico": "Calcio", "sinonimos": ["Calcio", "Calcio total"]},
+    {"canonico": "Fósforo", "sinonimos": ["Fósforo"]}
+  ],
+  "equivalencias_especiales": {
+    "_doc": "Sustituciones documentadas en la lista de precios: el nombre solicitado se traduce a N químicas individuales que ya están en la lista.",
+    "Globulinas": ["Proteínas", "Albúmina"],
+    "Globulina": ["Proteínas", "Albúmina"]
+  }
+}
