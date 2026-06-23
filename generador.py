@@ -60,6 +60,16 @@ def _sin_parens(s) -> str:
     return re.sub(r"\s*\([^)]*\)\s*", " ", str(s or "")).strip()
 
 
+def _limpiar_nombre_estudio(s) -> str:
+    """Limpia saltos de línea internos y whitespace duplicado del nombre
+    del estudio. Los vetes a veces meten \\n al cargar en AppSheet."""
+    if s in (None, ""):
+        return ""
+    txt = str(s).replace("\n", " ").replace("\r", " ").replace("\t", " ")
+    txt = re.sub(r"\s+", " ", txt).strip()
+    return txt
+
+
 def fecha_a_texto(valor) -> str:
     if valor is None or valor == "":
         return ""
@@ -183,6 +193,10 @@ class Catalogo:
 
     # Set ampliado de canónicos para "no flaggear" en Planilla cobro.
     canonicos_set: set[str] = field(default_factory=set)
+    # Mapa nombre_normalizado → nombre_oficial_del_catálogo. Sirve para
+    # devolver siempre la capitalización linda al hacer match (en lugar
+    # del texto que tipea el vete).
+    canonicos_nombre: dict[str, str] = field(default_factory=dict)
 
 
 _FILA_HEMOGRAMA_TOKEN = 24
@@ -253,17 +267,30 @@ def cargar_catalogo(wb, quimicas_path: Path | None = None) -> Catalogo:
         return cat
     ws = wb["Perfiles.Estudios_con_planilla"]
 
+    def _registrar_canonico(nombre: str) -> None:
+        """Guarda el mapeo normalizado → nombre lindo del catálogo. Si ya
+        estaba, no pisa (primer match gana)."""
+        n = normalize(nombre)
+        oficial = str(nombre).strip()
+        if n and n not in cat.canonicos_nombre:
+            cat.canonicos_nombre[n] = oficial
+        n_sp = normalize(_sin_parens(nombre))
+        if n_sp and n_sp not in cat.canonicos_nombre:
+            cat.canonicos_nombre[n_sp] = oficial
+
     # Fila 2: nombres de perfiles (cols 1..20)
     for j in range(1, 25):
         v = ws.cell(row=2, column=j).value
         if v not in (None, "") and str(v).strip() not in ("0",):
             cat.perfiles[normalize(v)] = j
+            _registrar_canonico(v)
 
     # Fila 56: nombres de químicas individuales
     for j in range(1, 25):
         v = ws.cell(row=_FILA_QUIMICAS_INDIVIDUALES, column=j).value
         if v not in (None, "") and str(v).strip() not in ("0",):
             cat.quimicas[normalize(v)] = j
+            _registrar_canonico(v)
 
     def _bloque_simple(fila: int) -> dict[str, str]:
         out: dict[str, str] = {}
@@ -271,6 +298,7 @@ def cargar_catalogo(wb, quimicas_path: Path | None = None) -> Catalogo:
             v = ws.cell(row=fila, column=j).value
             if v not in (None, "") and str(v).strip() not in ("0",):
                 out[normalize(v)] = str(v).strip()
+                _registrar_canonico(v)
         return out
 
     # Bloques con named ranges asociados (coagulograma_i, orina_i)
@@ -278,10 +306,12 @@ def cargar_catalogo(wb, quimicas_path: Path | None = None) -> Catalogo:
         v = ws.cell(row=_FILA_COAGULOGRAMAS, column=j).value
         if v not in (None, "") and str(v).strip() not in ("0",):
             cat.coagulogramas[normalize(v)] = (j, str(v).strip())
+            _registrar_canonico(v)
     for j in range(1, 25):
         v = ws.cell(row=_FILA_ORINAS, column=j).value
         if v not in (None, "") and str(v).strip() not in ("0",):
             cat.orinas[normalize(v)] = (j, str(v).strip())
+            _registrar_canonico(v)
 
     cat.serologia = _bloque_simple(_FILA_SEROLOGIA)
     cat.hemoparasitos = _bloque_simple(_FILA_HEMOPARASITOS)
@@ -356,6 +386,7 @@ def cargar_catalogo(wb, quimicas_path: Path | None = None) -> Catalogo:
             for v in row:
                 if v not in (None, ""):
                     cat.canonicos_set.add(normalize(v))
+                    _registrar_canonico(v)
 
     cat.canonicos_set.discard("")
     return cat
@@ -408,10 +439,11 @@ def cargar_protocolos(ws_protocolos) -> list[ProtocoloVete]:
         except (TypeError, ValueError):
             continue
         estudios = [
-            str(row[c]).strip()
+            _limpiar_nombre_estudio(row[c])
             for c in cols_estudios
             if row[c] not in (None, "")
         ]
+        estudios = [e for e in estudios if e]
         if not estudios:
             continue
         out.append(
@@ -869,18 +901,24 @@ def traducir_estudio(
     nombre_vete: str,
     aliases: dict[str, str],
     canonicos: set[str],
+    canonicos_nombre: dict[str, str] | None = None,
 ) -> tuple[str, str]:
-    """Devuelve (nombre_a_usar, fuente). fuente ∈ {'alias','canonico','crudo'}."""
+    """Devuelve (nombre_a_usar, fuente). fuente ∈ {'alias','canonico','crudo'}.
+
+    Cuando matchea como canónico, devuelve el nombre lindo del catálogo
+    (capitalización correcta) en lugar del texto tipeado por el vete.
+    """
+    canonicos_nombre = canonicos_nombre or {}
     n = normalize(nombre_vete)
     if n in aliases:
         return aliases[n], "alias"
     if n in canonicos:
-        return str(nombre_vete).strip(), "canonico"
+        return canonicos_nombre.get(n, str(nombre_vete).strip()), "canonico"
     n_sp = normalize(_sin_parens(nombre_vete))
     if n_sp and n_sp in aliases:
         return aliases[n_sp], "alias"
     if n_sp and n_sp in canonicos:
-        return str(nombre_vete).strip(), "canonico"
+        return canonicos_nombre.get(n_sp, str(nombre_vete).strip()), "canonico"
     return str(nombre_vete).strip(), "crudo"
 
 
@@ -1003,7 +1041,9 @@ def correr(
     for p in protocolos:
         traducidos: list[tuple[str, str]] = []
         for estudio_vete in p.estudios:
-            traducido, fuente = traducir_estudio(estudio_vete, aliases, cat.canonicos_set)
+            traducido, fuente = traducir_estudio(
+                estudio_vete, aliases, cat.canonicos_set, cat.canonicos_nombre
+            )
             traducidos.append((traducido, fuente))
             if fuente == "alias": n_alias += 1
             elif fuente == "canonico": n_canon += 1

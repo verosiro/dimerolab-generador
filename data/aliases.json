@@ -14,8 +14,17 @@
   "Vif vilef PCR": "Vif + ViLeF (PCR)",
   "frotis hemoparásitos": "Hemoparásitos sangre capilar (Frotis/Mycoplasma-Babesia)",
   "Vilef Carga viral": "ViLeF (ADN proviral) + carga proviral",
+  "ViLeF (ADN proviral) + carga ADN proviral": "ViLeF (ADN proviral) + carga proviral",
+  "Vilef carga ADN proviral": "ViLeF (ADN proviral) + carga proviral",
   "Vif + ViLeF (PCR)+ Micoplasmas hemotrópicos felinos: Mycoplasma haemofelis + Candidatus Mycoplasma haemominutum + Candidatus Mycoplasma turicensis (PCR)": "VIF (ADN proviral) + ViLeF (ADN proviral) + micoplasmas hemotrópicos felinos (PCR)",
+  "Vif vilef micoplasmas (PCR)": "VIF (ADN proviral) + ViLeF (ADN proviral) + micoplasmas hemotrópicos felinos (PCR)",
+  "Vif vilef micoplasmas PCR": "VIF (ADN proviral) + ViLeF (ADN proviral) + micoplasmas hemotrópicos felinos (PCR)",
+  "Vif + ViLeF (PCR)": "Vif + ViLeF (PCR)",
   "Citología linfoma": "Citología",
+  "Calicivirus felino": "Calicivirus felino (PCR)",
+  "Ehrlichia canis + Anaplasma platys + Hepatozoon canis (PCR)": "Ehrlichia canis + Anaplasma platys + Hepatozoon canis (PCR)",
+  "Coproparasitológico seriado exótico (doble técnica)": "Coproparasitológico seriado exótico (doble técnica)",
+  "Cultivo anaerobio": "Cultivo anaerobio",
   "_incluye_estudio_base_doc": "Estudios cobrados que 'absorben' un estudio base solicitado por el vete (no hace falta cobrar el base aparte). Clave = nombre del estudio base, valor = lista de cobrados que lo incluyen.",
   "_incluye_estudio_base": {
     "Histopatología": [
