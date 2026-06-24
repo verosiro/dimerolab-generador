@@ -14,8 +14,9 @@
     {"canonico": "Bilirrubinas", "sinonimos": ["Bilirrubinas", "Bilirrubina", "Bilirrubina Total", "Bilirrubina Directa", "Bilirrubina Indirecta"]},
     {"canonico": "Colesterol total", "sinonimos": ["Colesterol total", "Colesterol", "Colesterol Total"]},
     {"canonico": "Triglicéridos", "sinonimos": ["Triglicéridos"]},
-    {"canonico": "Calcio", "sinonimos": ["Calcio", "Calcio total"]},
-    {"canonico": "Fósforo", "sinonimos": ["Fósforo", "Fosfatemia"]}
+    {"canonico": "Calcio total", "sinonimos": ["Calcio", "Calcio total", "Calcemia"]},
+    {"canonico": "Fósforo", "sinonimos": ["Fósforo", "Fosfatemia"]},
+    {"canonico": "LDH", "sinonimos": ["LDH", "Lactato deshidrogenasa"]}
   ],
   "equivalencias_especiales": {
     "_doc": "Sustituciones documentadas en la lista de precios: el nombre solicitado se traduce a N químicas individuales que ya están en la lista.",

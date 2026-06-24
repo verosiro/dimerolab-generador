@@ -1,0 +1,11 @@
+{
+  "_doc": "Mapeo de destino corto (lo que figura en derivables.json) → destino completo que aparece en el membrete impreso del Templado V2. Incluye persona de contacto o referencia del laboratorio de destino. Clave es case-sensitive en mayúsculas.",
+  "destinos": {
+    "RAPELA": "Rapela: Zapata Francisco",
+    "DIAP": "DIAP (DimeroLab)",
+    "DIAGNOTEST": "Diagnotest (3130)",
+    "EN EL LABO": "FREEZER/en el labo",
+    "TCBA": "TCBA (DímeroLab: Francisco Zapata)",
+    "EPIZOOLAB": "Epizoolab (Dímerolab)"
+  }
+}

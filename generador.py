@@ -163,6 +163,22 @@ def cargar_derivables(path: Path) -> dict[str, str]:
     }
 
 
+def cargar_destinos(path: Path) -> dict[str, str]:
+    """{destino_corto_upper: destino_completo_con_contacto}
+
+    Ej: 'TCBA' → 'TCBA (DímeroLab: Francisco Zapata)'. Lo que va en el
+    membrete impreso es el completo.
+    """
+    if not path or not path.exists():
+        return {}
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return {
+        str(k).strip().upper(): str(v).strip()
+        for k, v in raw.get("destinos", {}).items()
+        if v
+    }
+
+
 # ─────────── catálogo del .xlsm ───────────────────────────────────────────
 
 
@@ -536,14 +552,16 @@ class Distribuidor:
         cat: Catalogo,
         catalogo_quimicas: CatalogoQuimicas | None = None,
         derivables: dict[str, str] | None = None,
+        destinos_largos: dict[str, str] | None = None,
     ):
         self.wb = wb
         self.cat = cat
         self.catalogo_quimicas = catalogo_quimicas or CatalogoQuimicas()
         self.derivables = derivables or {}
+        self.destinos_largos = destinos_largos or {}
         # Set para evitar duplicar entradas en Derivaciones (codigo, estudio_norm).
         self._derivaciones_vistas: set[tuple[int, str]] = set()
-        # Contadores: destino → cantidad de filas derivadas
+        # Contadores: destino_corto → cantidad de filas derivadas
         self.derivaciones_por_destino: dict[str, int] = {}
         # filas pendientes por planilla
         self.cobro: list[dict] = []
@@ -689,11 +707,13 @@ class Distribuidor:
         self._derivaciones_vistas.add(key)
         fila = self._datos_paciente(p, estudio)
         if destino:
-            fila["destino"] = destino
+            fila["destino"] = destino  # destino corto (TCBA, DIAP, etc.)
+            fila["destino_largo"] = self.destinos_largos.get(destino, destino)
             self.derivaciones_por_destino[destino] = (
                 self.derivaciones_por_destino.get(destino, 0) + 1
             )
         else:
+            fila["destino_largo"] = "(definir)"
             self.derivaciones_por_destino["(definir)"] = (
                 self.derivaciones_por_destino.get("(definir)", 0) + 1
             )
@@ -940,8 +960,9 @@ def agrupar_membretes(
     grupos: dict[tuple[int, str], dict] = {}
     orden: list[tuple[int, str]] = []
     for d in derivaciones:
-        destino = d.get("destino") or "(definir)"
-        key = (d["codigo"], destino)
+        destino_corto = d.get("destino") or "(definir)"
+        destino_largo = d.get("destino_largo") or destino_corto
+        key = (d["codigo"], destino_corto)
         if key not in grupos:
             grupos[key] = {
                 "codigo": d["codigo"],
@@ -953,7 +974,8 @@ def agrupar_membretes(
                 "edad": d["edad"],
                 "sexo": d["sexo"],
                 "estudios": [d["estudio"]],
-                "destino": destino,
+                "destino": destino_largo,  # el largo va al membrete
+                "destino_corto": destino_corto,  # el corto para métricas/UI
             }
             orden.append(key)
         else:
@@ -966,31 +988,73 @@ def agrupar_membretes(
     return out
 
 
+# Mapeo columna Membretes → key del dict de membrete
+_COL_MEMBRETE_KEY = {
+    "A": "codigo", "B": "veterinaria", "C": "paciente", "D": "propietario",
+    "E": "especie", "F": "raza", "G": "edad", "H": "sexo",
+    "I": "estudio", "J": "muestra", "K": "destino",
+}
+
+# Regex para parsear fórmulas tipo '=Membretes!K2' o '=Membretes!$K$2'
+_RX_FORMULA_MEMBRETES = re.compile(
+    r"^=\s*Membretes!\$?([A-K])\$?(\d+)\s*$", re.IGNORECASE
+)
+
+
 def poblar_templado(template_bytes: bytes, membretes: list[dict]) -> bytes:
-    """Abre el Templado V2, llena la hoja Membretes (datos desde fila 2) y
-    devuelve el bytes del archivo modificado. Hoja1 se autopobla por fórmulas."""
+    """Abre el Templado V2, llena la hoja Membretes y resuelve las fórmulas
+    de Hoja1 con valores directos (sin depender de que Excel recalcule).
+
+    El template original tiene Hoja1 con fórmulas tipo `=Membretes!K2` que
+    apuntan a cada fila de Membretes. Estas fórmulas a veces NO se evalúan
+    al abrir en Excel (modo protegido, archivo descargado de internet, etc).
+    Para evitar eso, resolvemos cada fórmula acá y escribimos el valor
+    directo. Membretes igual queda lleno por si la usuaria quiere editarlo.
+    """
     wb = openpyxl.load_workbook(BytesIO(template_bytes), keep_vba=True, data_only=False)
     if "Membretes" not in wb.sheetnames:
         raise ValueError("El templado no tiene hoja 'Membretes'")
-    ws = wb["Membretes"]
-    # Limpiar filas viejas (mantengo header en fila 1).
-    _limpiar_desde_fila(ws, 2)
-    # Headers esperados (fila 1):
-    #   A=Código, B=Veterinaria, C=Paciente, D=Propietario, E=Especie,
-    #   F=Raza, G=Edad, H=Sexo, I=Estudio, J=Muestra, K=Destino
+
+    # 1) Llenar Membretes (datos desde fila 2). Header en fila 1, cols:
+    # A=Código, B=Veterinaria, C=Paciente, D=Propietario, E=Especie,
+    # F=Raza, G=Edad, H=Sexo, I=Estudio, J=Muestra, K=Destino
+    ws_m = wb["Membretes"]
+    _limpiar_desde_fila(ws_m, 2)
     for i, m in enumerate(membretes):
         r = 2 + i
-        ws.cell(row=r, column=1, value=m["codigo"])
-        ws.cell(row=r, column=2, value=m["veterinaria"])
-        ws.cell(row=r, column=3, value=m["paciente"])
-        ws.cell(row=r, column=4, value=m["propietario"])
-        ws.cell(row=r, column=5, value=m["especie"])
-        ws.cell(row=r, column=6, value=m["raza"])
-        ws.cell(row=r, column=7, value=m["edad"])
-        ws.cell(row=r, column=8, value=m["sexo"])
-        ws.cell(row=r, column=9, value=m["estudio"])
-        # Columna J (Muestra) la deja en blanco — la completa la usuaria.
-        ws.cell(row=r, column=11, value=m["destino"])
+        ws_m.cell(row=r, column=1, value=m["codigo"])
+        ws_m.cell(row=r, column=2, value=m["veterinaria"])
+        ws_m.cell(row=r, column=3, value=m["paciente"])
+        ws_m.cell(row=r, column=4, value=m["propietario"])
+        ws_m.cell(row=r, column=5, value=m["especie"])
+        ws_m.cell(row=r, column=6, value=m["raza"])
+        ws_m.cell(row=r, column=7, value=m["edad"])
+        ws_m.cell(row=r, column=8, value=m["sexo"])
+        ws_m.cell(row=r, column=9, value=m["estudio"])
+        # Columna J (Muestra) en blanco — la completa la usuaria.
+        ws_m.cell(row=r, column=11, value=m["destino"])
+
+    # 2) Resolver fórmulas de Hoja1 con valores directos.
+    if "Hoja1" in wb.sheetnames:
+        ws_h = wb["Hoja1"]
+        for row in ws_h.iter_rows():
+            for cell in row:
+                if not isinstance(cell.value, str):
+                    continue
+                m = _RX_FORMULA_MEMBRETES.match(cell.value)
+                if not m:
+                    continue
+                col_letra = m.group(1).upper()
+                fila_membrete = int(m.group(2))
+                # Fila 2 de Membretes = membrete[0], fila 3 = membrete[1], etc.
+                idx = fila_membrete - 2
+                key = _COL_MEMBRETE_KEY.get(col_letra)
+                if 0 <= idx < len(membretes) and key:
+                    cell.value = membretes[idx].get(key, "")
+                else:
+                    # Membrete no existe (más posiciones que datos) → vaciar
+                    cell.value = None
+
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -1029,14 +1093,16 @@ def correr(
         derivables_path = aliases_path.parent / "derivables.json"
     if templado_path is None:
         templado_path = aliases_path.parent / "templado_derivaciones.xlsm"
+    destinos_path = aliases_path.parent / "destinos.json"
 
     aliases = cargar_aliases(aliases_path)
     cat = cargar_catalogo(wb, quimicas_path)
     catalogo_q = cargar_catalogo_quimicas(quimicas_path)
     derivables = cargar_derivables(derivables_path)
+    destinos_largos = cargar_destinos(destinos_path)
     protocolos = cargar_protocolos(wb["ProtocolosDigitales"])
 
-    dist = Distribuidor(wb, cat, catalogo_q, derivables)
+    dist = Distribuidor(wb, cat, catalogo_q, derivables, destinos_largos)
     n_alias = n_canon = n_crudo = 0
     for p in protocolos:
         traducidos: list[tuple[str, str]] = []
