@@ -61,8 +61,9 @@ with st.expander("Cómo funciona", expanded=False):
         - Para cada protocolo, genera **una fila por cada estudio** (P_Estudio, Estudio_2..5).
         - **Traduce nombres** que tienen alias conocido (T4 → T4 Total, Hemograma → Hemograma completo, etc.).
         - Si un estudio **no tiene alias**, deja el nombre del vete tal cual y **resalta la fila en amarillo** para que la revises.
-        - **Borra el contenido previo** de `Planilla cobro` antes de escribir (asumí que la subís vacía).
-        - **No toca** ninguna otra hoja del .xlsm (macros, perfiles, planillas de trabajo, etc. quedan iguales).
+        - **Modo "Agregar nuevos"** (default): solo procesa los protocolos cuyo código aún no esté en Planilla cobro — sirve para subir tandas adicionales en el día.
+        - **Modo "Regenerar todo"**: borra el contenido previo de todas las planillas y rehace desde cero.
+        - **No toca** ninguna otra hoja del .xlsm (macros, perfiles, etc. quedan iguales).
         """
     )
 
@@ -72,8 +73,23 @@ if uploaded is None:
     st.info("Esperando archivo...")
     st.stop()
 
+modo = st.radio(
+    "Modo",
+    options=["Agregar nuevos (incremental)", "Regenerar todo desde cero"],
+    index=0,
+    horizontal=True,
+    help=(
+        "**Agregar nuevos**: si subís un .xlsm que ya tiene protocolos cargados (de una tanda anterior), "
+        "la app preserva lo existente y solo agrega los protocolos cuyo código no esté ya en Planilla cobro. "
+        "Sirve cuando llega una segunda tanda en el día.\n\n"
+        "**Regenerar todo**: borra el contenido previo de todas las planillas y vuelve a generar desde cero. "
+        "Útil si modificaste aliases/derivables y querés rehacer todo."
+    ),
+)
+modo_arg = "incremental" if modo.startswith("Agregar") else "completo"
+
 try:
-    res = correr(uploaded.getvalue(), DATA_DIR / "aliases.json")
+    res = correr(uploaded.getvalue(), DATA_DIR / "aliases.json", modo=modo_arg)
 except ValueError as e:
     st.error(f"❌ {e}")
     st.stop()
@@ -82,6 +98,17 @@ except Exception as e:
     st.stop()
 
 m = res.metricas
+
+if modo_arg == "incremental":
+    ya = m.get("protocolos_ya_cargados", 0)
+    om = m.get("protocolos_omitidos_por_existir", 0)
+    if ya > 0:
+        st.info(
+            f"📋 El archivo ya tenía **{ya} protocolos cargados**. "
+            f"Omití {om} que ya estaban; procesé los nuevos."
+        )
+    else:
+        st.info("📋 El archivo no tenía protocolos previos cargados — se cargó como tanda inicial.")
 
 st.subheader("Resumen")
 c1, c2, c3, c4 = st.columns(4)

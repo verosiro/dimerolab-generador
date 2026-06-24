@@ -425,6 +425,31 @@ class ProtocoloVete:
     estudios: list[str] = field(default_factory=list)
 
 
+def codigos_ya_cargados(wb) -> set[int]:
+    """Lee la Planilla cobro y devuelve el set de códigos de protocolo que
+    ya tienen al menos una fila cargada. Sirve para el modo incremental:
+    solo procesar los protocolos nuevos."""
+    if "Planilla cobro" not in wb.sheetnames:
+        return set()
+    ws = wb["Planilla cobro"]
+    try:
+        header_row = _find_header_row(ws, "CODIGO")
+    except ValueError:
+        return set()
+    out: set[int] = set()
+    for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
+        if len(row) < 2:
+            continue
+        cod = row[1]
+        if cod in (None, ""):
+            continue
+        try:
+            out.add(int(cod))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def cargar_protocolos(ws_protocolos) -> list[ProtocoloVete]:
     headers = [normalize(c.value) for c in ws_protocolos[1]]
     idx = {h: i for i, h in enumerate(headers) if h}
@@ -821,27 +846,48 @@ class Distribuidor:
 
     # ---- escritura final ----
 
-    def volcar(self) -> Distribucion:
+    def volcar(self, incremental: bool = False) -> Distribucion:
+        """Escribe todas las planillas.
+
+        - Si incremental=False: borra el contenido previo de cada planilla
+          y escribe todo desde cero.
+        - Si incremental=True: NO borra nada; agrega filas al final de cada
+          planilla (asume que las filas previas son de cargas anteriores
+          que hay que preservar).
+        """
         d = Distribucion()
-        d.cobro = self._escribir_cobro_o_derivacion("Planilla cobro", self.cobro, header_token="CODIGO")
-        d.derivaciones = self._escribir_cobro_o_derivacion("Derivaciones", self.derivaciones, header_token="CODIGO")
-        d.hemograma = self._escribir_id_componente("Planilla Trabajo Hemograma", self.hemograma)
-        d.quimica = self._escribir_id_componente("Planilla trabajo química", self.quimica, extra_col_d=True)
-        d.orinas = self._escribir_id_componente("Planilla Orinas", self.orinas)
-        d.coagulograma = self._escribir_id_componente("Planilla Coagulograma", self.coagulograma)
-        d.serologia = self._escribir_id_componente("Planilla Serología", self.serologia)
-        d.hemoparasitos = self._escribir_id_componente("Planilla Hemoparásitos", self.hemoparasitos)
-        d.hematologia = self._escribir_id_componente("Planilla hematología", self.hematologia)
-        d.vetcheck = self._escribir_vetcheck("Planilla VetCheck", self.vetcheck)
+        d.cobro = self._escribir_cobro_o_derivacion("Planilla cobro", self.cobro, header_token="CODIGO", incremental=incremental)
+        d.derivaciones = self._escribir_cobro_o_derivacion("Derivaciones", self.derivaciones, header_token="CODIGO", incremental=incremental)
+        d.hemograma = self._escribir_id_componente("Planilla Trabajo Hemograma", self.hemograma, incremental=incremental)
+        d.quimica = self._escribir_id_componente("Planilla trabajo química", self.quimica, extra_col_d=True, incremental=incremental)
+        d.orinas = self._escribir_id_componente("Planilla Orinas", self.orinas, incremental=incremental)
+        d.coagulograma = self._escribir_id_componente("Planilla Coagulograma", self.coagulograma, incremental=incremental)
+        d.serologia = self._escribir_id_componente("Planilla Serología", self.serologia, incremental=incremental)
+        d.hemoparasitos = self._escribir_id_componente("Planilla Hemoparásitos", self.hemoparasitos, incremental=incremental)
+        d.hematologia = self._escribir_id_componente("Planilla hematología", self.hematologia, incremental=incremental)
+        d.vetcheck = self._escribir_vetcheck("Planilla VetCheck", self.vetcheck, incremental=incremental)
         return d
 
-    def _escribir_cobro_o_derivacion(self, sheet: str, filas: list[dict], header_token: str) -> int:
+    def _primera_fila_libre(self, ws, desde: int) -> int:
+        """Devuelve la primera fila vacía a partir de `desde`. Útil para modo
+        incremental: encuentra dónde seguir escribiendo."""
+        for r in range(desde, ws.max_row + 2):
+            cell_a = ws.cell(row=r, column=1).value
+            cell_b = ws.cell(row=r, column=2).value
+            if cell_a in (None, "") and cell_b in (None, ""):
+                return r
+        return ws.max_row + 1
+
+    def _escribir_cobro_o_derivacion(self, sheet: str, filas: list[dict], header_token: str, incremental: bool = False) -> int:
         if sheet not in self.wb.sheetnames:
             return 0
         ws = self.wb[sheet]
         header_row = _find_header_row(ws, header_token)
-        primera = header_row + 1
-        _limpiar_desde_fila(ws, primera)
+        if incremental:
+            primera = self._primera_fila_libre(ws, header_row + 1)
+        else:
+            primera = header_row + 1
+            _limpiar_desde_fila(ws, primera)
         # Headers de la planilla (mapping)
         headers = [normalize(c.value) for c in ws[header_row]]
         col = {h: i + 1 for i, h in enumerate(headers) if h}
@@ -878,13 +924,17 @@ class Distribuidor:
         sheet: str,
         filas: list[tuple[int, str]],
         extra_col_d: bool = False,
+        incremental: bool = False,
     ) -> int:
         if sheet not in self.wb.sheetnames:
             return 0
         ws = self.wb[sheet]
         # Estas planillas tienen header en fila 1, datos desde fila 2.
-        primera = 2
-        _limpiar_desde_fila(ws, primera)
+        if incremental:
+            primera = self._primera_fila_libre(ws, 2)
+        else:
+            primera = 2
+            _limpiar_desde_fila(ws, primera)
         for i, (codigo, componente) in enumerate(filas):
             r = primera + i
             ws.cell(row=r, column=1, value=codigo)
@@ -893,12 +943,15 @@ class Distribuidor:
                 ws.cell(row=r, column=4, value=f"{codigo}{componente}")
         return len(filas)
 
-    def _escribir_vetcheck(self, sheet: str, filas: list[dict]) -> int:
+    def _escribir_vetcheck(self, sheet: str, filas: list[dict], incremental: bool = False) -> int:
         if sheet not in self.wb.sheetnames:
             return 0
         ws = self.wb[sheet]
-        primera = 2
-        _limpiar_desde_fila(ws, primera)
+        if incremental:
+            primera = self._primera_fila_libre(ws, 2)
+        else:
+            primera = 2
+            _limpiar_desde_fila(ws, primera)
         for i, f in enumerate(filas):
             r = primera + i
             ws.cell(row=r, column=1, value=f["fecha"])
@@ -1079,7 +1132,15 @@ def correr(
     quimicas_path: Path | None = None,
     derivables_path: Path | None = None,
     templado_path: Path | None = None,
+    modo: str = "completo",
 ) -> Resultado:
+    """`modo`:
+    - 'completo' (default): borra el contenido previo de las planillas y
+      las regenera desde cero.
+    - 'incremental': preserva lo que ya está cargado, solo procesa los
+      protocolos cuyo código no esté en Planilla cobro. Útil cuando llega
+      una segunda tanda de protocolos en el mismo día.
+    """
     wb = openpyxl.load_workbook(BytesIO(xlsm_bytes), keep_vba=True, data_only=False)
 
     if "ProtocolosDigitales" not in wb.sheetnames:
@@ -1102,6 +1163,16 @@ def correr(
     destinos_largos = cargar_destinos(destinos_path)
     protocolos = cargar_protocolos(wb["ProtocolosDigitales"])
 
+    # Modo incremental: solo procesar protocolos que no estén ya cargados.
+    incremental = (modo == "incremental")
+    ya_cargados: set[int] = set()
+    n_omitidos = 0
+    if incremental:
+        ya_cargados = codigos_ya_cargados(wb)
+        antes = len(protocolos)
+        protocolos = [p for p in protocolos if p.codigo not in ya_cargados]
+        n_omitidos = antes - len(protocolos)
+
     dist = Distribuidor(wb, cat, catalogo_q, derivables, destinos_largos)
     n_alias = n_canon = n_crudo = 0
     for p in protocolos:
@@ -1116,12 +1187,15 @@ def correr(
             else: n_crudo += 1
         dist.procesar_protocolo(p, traducidos)
 
-    resumen = dist.volcar()
+    resumen = dist.volcar(incremental=incremental)
 
     buffer = BytesIO()
     wb.save(buffer)
 
     metricas = {
+        "modo": modo,
+        "protocolos_ya_cargados": len(ya_cargados),
+        "protocolos_omitidos_por_existir": n_omitidos,
         "protocolos_unicos": len({p.codigo for p in protocolos}),
         "estudios_totales": sum(len(p.estudios) for p in protocolos),
         "estudios_alias": n_alias,
