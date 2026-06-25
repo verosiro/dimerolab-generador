@@ -1055,14 +1055,15 @@ _RX_FORMULA_MEMBRETES = re.compile(
 
 
 def poblar_templado(template_bytes: bytes, membretes: list[dict]) -> bytes:
-    """Abre el Templado V2, llena la hoja Membretes y resuelve las fórmulas
-    de Hoja1 con valores directos (sin depender de que Excel recalcule).
+    """Abre el Templado V2, llena Membretes y preserva las fórmulas de Hoja1.
 
-    El template original tiene Hoja1 con fórmulas tipo `=Membretes!K2` que
-    apuntan a cada fila de Membretes. Estas fórmulas a veces NO se evalúan
-    al abrir en Excel (modo protegido, archivo descargado de internet, etc).
-    Para evitar eso, resolvemos cada fórmula acá y escribimos el valor
-    directo. Membretes igual queda lleno por si la usuaria quiere editarlo.
+    Mantiene las fórmulas tipo `=Membretes!K2` en Hoja1 para que sigan
+    funcionando cuando la usuaria edita Membretes. Pero como Excel no
+    siempre recalcula al abrir archivos descargados de internet, post-
+    procesamos el .xlsm e inyectamos el valor cacheado de cada fórmula
+    directamente en el XML — así Hoja1 muestra los datos al abrir SIN
+    depender de la recalculación, y si la usuaria edita una fila de
+    Membretes, Excel detecta el cambio y la fórmula se recalcula.
     """
     wb = openpyxl.load_workbook(BytesIO(template_bytes), keep_vba=True, data_only=False)
     if "Membretes" not in wb.sheetnames:
@@ -1087,30 +1088,152 @@ def poblar_templado(template_bytes: bytes, membretes: list[dict]) -> bytes:
         # Columna J (Muestra) en blanco — la completa la usuaria.
         ws_m.cell(row=r, column=11, value=m["destino"])
 
-    # 2) Resolver fórmulas de Hoja1 con valores directos.
-    if "Hoja1" in wb.sheetnames:
-        ws_h = wb["Hoja1"]
-        for row in ws_h.iter_rows():
-            for cell in row:
-                if not isinstance(cell.value, str):
-                    continue
-                m = _RX_FORMULA_MEMBRETES.match(cell.value)
-                if not m:
-                    continue
-                col_letra = m.group(1).upper()
-                fila_membrete = int(m.group(2))
-                # Fila 2 de Membretes = membrete[0], fila 3 = membrete[1], etc.
-                idx = fila_membrete - 2
-                key = _COL_MEMBRETE_KEY.get(col_letra)
-                if 0 <= idx < len(membretes) and key:
-                    cell.value = membretes[idx].get(key, "")
-                else:
-                    # Membrete no existe (más posiciones que datos) → vaciar
-                    cell.value = None
+    # 2) Forzar a Excel a recalcular al abrir (por si el cached value falla).
+    wb.calculation.calcMode = "auto"
+    wb.calculation.fullCalcOnLoad = True
+    wb.calculation.calcCompleted = False
 
+    # 3) Guardar a bytes — Hoja1 mantiene sus fórmulas originales intactas.
     buf = BytesIO()
     wb.save(buf)
-    return buf.getvalue()
+
+    # 4) Post-procesar el .xlsm para inyectar cached values en Hoja1.
+    return _inyectar_cached_values_hoja1(buf.getvalue(), membretes)
+
+
+def _inyectar_cached_values_hoja1(xlsm_bytes: bytes, membretes: list[dict]) -> bytes:
+    """Modifica el XML del .xlsm para que cada fórmula `=Membretes!XR` en
+    Hoja1 tenga su `<v>VALOR</v>` cacheado. Así Excel muestra los datos
+    al abrir sin necesidad de recalcular.
+    """
+    import zipfile
+    from xml.etree import ElementTree as ET
+
+    in_buf = BytesIO(xlsm_bytes)
+    out_buf = BytesIO()
+
+    with zipfile.ZipFile(in_buf, "r") as zin:
+        # Encontrar qué archivo XML corresponde a Hoja1
+        sheet_path = _resolver_xml_de_hoja(zin, "Hoja1")
+
+        with zipfile.ZipFile(out_buf, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.namelist():
+                data = zin.read(item)
+                if sheet_path and item == sheet_path:
+                    data = _patch_sheet_xml_con_cached_values(data, membretes)
+                zout.writestr(item, data)
+
+    return out_buf.getvalue()
+
+
+def _resolver_xml_de_hoja(zin, nombre_hoja: str) -> str | None:
+    """Dado un ZIP de .xlsm abierto, devuelve la ruta del XML que corresponde
+    a la hoja con el nombre dado (ej: 'xl/worksheets/sheet1.xml')."""
+    from xml.etree import ElementTree as ET
+
+    ns = {
+        "main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+        "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+        "rels": "http://schemas.openxmlformats.org/package/2006/relationships",
+    }
+
+    try:
+        wb_xml = zin.read("xl/workbook.xml")
+        rels_xml = zin.read("xl/_rels/workbook.xml.rels")
+    except KeyError:
+        return None
+
+    # Buscar el rId de la hoja
+    wb_root = ET.fromstring(wb_xml)
+    rid = None
+    for sheet in wb_root.iter(f"{{{ns['main']}}}sheet"):
+        if sheet.attrib.get("name") == nombre_hoja:
+            rid = sheet.attrib.get(f"{{{ns['r']}}}id")
+            break
+    if not rid:
+        return None
+
+    # Resolver el rId a un target
+    rels_root = ET.fromstring(rels_xml)
+    for rel in rels_root.iter(f"{{{ns['rels']}}}Relationship"):
+        if rel.attrib.get("Id") == rid:
+            target = rel.attrib.get("Target", "")
+            # Normalizar a ruta dentro del ZIP. Target puede venir como:
+            # - "/xl/worksheets/sheet1.xml" (absoluto desde root del package)
+            # - "xl/worksheets/sheet1.xml" (con prefijo xl)
+            # - "worksheets/sheet1.xml" (relativo a xl/)
+            t = target.lstrip("/")
+            if t.startswith("xl/"):
+                return t
+            return f"xl/{t}"
+    return None
+
+
+def _patch_sheet_xml_con_cached_values(xml_bytes: bytes, membretes: list[dict]) -> bytes:
+    """Para cada `<c r="..."><f>=Membretes!XR</f></c>`, agrega `<v>VALOR</v>`
+    con el valor calculado a partir de los datos de membretes."""
+
+    text = xml_bytes.decode("utf-8")
+
+    # Regex que matchea celdas con fórmula a Membretes. openpyxl escribe:
+    #   <c r="A1" s="27"><f>Membretes!K2</f><v /></c>
+    # Nota: la fórmula NO tiene "=" al inicio en el XML, y el <v /> viene
+    # self-closing (sin valor) o como <v>...</v> si ya hay cached.
+    pattern = re.compile(
+        r'<c\b([^>]*?)>'              # 1: atributos completos del <c>
+        r'\s*<f\b[^>]*>'              # apertura de <f>
+        r'\s*=?\s*Membretes!\$?([A-K])\$?(\d+)\s*'  # 2: col letra, 3: fila
+        r'</f>'                       # cierre de <f>
+        r'(?:\s*<v\s*/>|\s*<v[^>]*>[^<]*</v>)?'  # opcional: <v/> o <v>...</v>
+        r'\s*</c>',
+        re.IGNORECASE,
+    )
+
+    def replace_fn(m):
+        attrs = m.group(1)  # algo como ' r="A1" s="27"'
+        col_letra = m.group(2).upper()
+        fila_membrete = int(m.group(3))
+        idx = fila_membrete - 2  # primer membrete es fila 2
+
+        key = _COL_MEMBRETE_KEY.get(col_letra)
+        if not key or not (0 <= idx < len(membretes)):
+            return m.group(0)
+
+        valor = membretes[idx].get(key, "")
+        if valor in (None, ""):
+            return m.group(0)
+
+        # Limpiar atributos: quitar t="..." si está
+        attrs_limpio = re.sub(r'\s+t="[^"]*"', '', attrs)
+
+        if isinstance(valor, (int, float)):
+            cached = str(valor)
+            return (
+                f'<c{attrs_limpio}>'
+                f'<f>Membretes!{col_letra}{fila_membrete}</f>'
+                f'<v>{cached}</v>'
+                f'</c>'
+            )
+        else:
+            cached = _xml_escape(str(valor))
+            return (
+                f'<c{attrs_limpio} t="str">'
+                f'<f>Membretes!{col_letra}{fila_membrete}</f>'
+                f'<v>{cached}</v>'
+                f'</c>'
+            )
+
+    text = pattern.sub(replace_fn, text)
+    return text.encode("utf-8")
+
+
+def _xml_escape(s: str) -> str:
+    return (
+        s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
 
 
 # ─────────── entrada principal ────────────────────────────────────────────
