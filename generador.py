@@ -70,6 +70,53 @@ def _limpiar_nombre_estudio(s) -> str:
     return txt
 
 
+# Anotaciones de muestra que vienen pegadas al nombre del estudio.
+# Cuando el vete escribe "Perfil completo LIPEMICO", la usuaria preserva
+# el sufijo en la planilla cobro (es info importante para el técnico).
+# Detectamos el sufijo, traducimos el estudio base al canónico y volvemos
+# a pegar la anotación al final.
+ANOTACIONES_MUESTRA = [
+    "lipemico", "lipemica",
+    "hemolizado", "hemolizada",
+    "coagulado", "coagulada",
+    "hg coagulado", "hemograma coagulado",
+    "muestra escasa",
+    "repeticion", "repetición",
+    "otra vez",
+    "sin cargo",
+    "post dexametasona",
+    "post estimulacion", "post estimulación",
+    "post estimulacion acth", "post estimulación acth",
+]
+
+
+def _separar_anotacion_muestra(nombre: str) -> tuple[str, str]:
+    """Devuelve (nombre_sin_anotacion, anotacion_original_con_caps).
+
+    Si el nombre termina con una anotación conocida ('Perfil completo LIPEMICO'),
+    la devuelve por separado preservando la capitalización original. Si no,
+    devuelve (nombre, '').
+    """
+    if not nombre:
+        return ("", "")
+    n_normalizado = normalize(nombre)
+    for anot in sorted(ANOTACIONES_MUESTRA, key=len, reverse=True):
+        if n_normalizado.endswith(" " + anot):
+            # Buscar el corte real en el texto original (preserva mayúsculas)
+            # Suficiente: contar la longitud relativa al normalizado.
+            # Como `normalize` solo baja a lower y deja whitespace simple,
+            # los chars son equivalentes en cantidad. Hago búsqueda case-insensitive.
+            largo_anot = len(anot)
+            # Tomar los últimos chars del original (descartando trailing whitespace)
+            stripped = nombre.rstrip()
+            # Buscar la anotación al final del original ignorando case
+            if stripped.lower().endswith(anot):
+                base = stripped[: -largo_anot].rstrip()
+                sufijo = stripped[-largo_anot:]  # como vino el vete
+                return (base, sufijo)
+    return (nombre, "")
+
+
 def fecha_a_texto(valor) -> str:
     if valor is None or valor == "":
         return ""
@@ -980,18 +1027,28 @@ def traducir_estudio(
 
     Cuando matchea como canónico, devuelve el nombre lindo del catálogo
     (capitalización correcta) en lugar del texto tipeado por el vete.
+    Preserva anotaciones de muestra al final ('LIPEMICO', 'HEMOLIZADO',
+    'COAGULADO', 'REPETICION', etc.).
     """
     canonicos_nombre = canonicos_nombre or {}
-    n = normalize(nombre_vete)
+
+    # Separar anotación de muestra si la hay (LIPEMICO, COAGULADO, etc.)
+    base, anotacion = _separar_anotacion_muestra(nombre_vete)
+    sufijo = f" {anotacion}" if anotacion else ""
+
+    def _con_sufijo(s: str) -> str:
+        return f"{s}{sufijo}"
+
+    n = normalize(base)
     if n in aliases:
-        return aliases[n], "alias"
+        return _con_sufijo(aliases[n]), "alias"
     if n in canonicos:
-        return canonicos_nombre.get(n, str(nombre_vete).strip()), "canonico"
-    n_sp = normalize(_sin_parens(nombre_vete))
+        return _con_sufijo(canonicos_nombre.get(n, base.strip())), "canonico"
+    n_sp = normalize(_sin_parens(base))
     if n_sp and n_sp in aliases:
-        return aliases[n_sp], "alias"
+        return _con_sufijo(aliases[n_sp]), "alias"
     if n_sp and n_sp in canonicos:
-        return canonicos_nombre.get(n_sp, str(nombre_vete).strip()), "canonico"
+        return _con_sufijo(canonicos_nombre.get(n_sp, base.strip())), "canonico"
     return str(nombre_vete).strip(), "crudo"
 
 
@@ -1073,6 +1130,13 @@ def poblar_templado(template_bytes: bytes, membretes: list[dict]) -> bytes:
     # A=Código, B=Veterinaria, C=Paciente, D=Propietario, E=Especie,
     # F=Raza, G=Edad, H=Sexo, I=Estudio, J=Muestra, K=Destino
     ws_m = wb["Membretes"]
+    # Descombinar celdas en la zona de datos (filas 2 en adelante).
+    # El template trae A27:K27 combinada con un valor residual; eso ocultaba
+    # las columnas B-K del 26to membrete. Hacemos unmerge defensivo de
+    # cualquier rango que toque la zona de datos.
+    for rng in list(ws_m.merged_cells.ranges):
+        if rng.min_row >= 2:
+            ws_m.unmerge_cells(str(rng))
     _limpiar_desde_fila(ws_m, 2)
     for i, m in enumerate(membretes):
         r = 2 + i
