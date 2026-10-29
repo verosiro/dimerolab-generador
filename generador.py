@@ -1165,6 +1165,86 @@ def poblar_templado(template_bytes: bytes, membretes: list[dict]) -> bytes:
     return _inyectar_cached_values_hoja1(buf.getvalue(), membretes)
 
 
+def _preservar_recursos_del_original(
+    xlsm_generado: bytes,
+    xlsm_original: bytes,
+    hojas_modificadas: list[str],
+) -> bytes:
+    """Mergea el .xlsm generado por openpyxl con el .xlsm original para
+    preservar los recursos que openpyxl rompe/pierde al guardar .xlsm con
+    macros y botones ActiveX (drawings, ctrlProps, activeX, sheet rels,
+    workbook rels, Content_Types).
+
+    Estrategia: del archivo original tomamos TODO. Solo sobrescribimos los
+    XMLs de las hojas listadas en `hojas_modificadas` con los del generado.
+
+    Esto depende de que openpyxl haya preservado el orden de las hojas
+    (mismo mapeo nombre → sheet?.xml). Si cambió, el merge falla.
+    """
+    import zipfile
+
+    with zipfile.ZipFile(BytesIO(xlsm_generado)) as z_gen:
+        # Para cada hoja modificada, saco la ruta del XML y su contenido
+        mapa_gen = _mapa_nombre_a_xml(z_gen)
+        hojas_nuevas: dict[str, bytes] = {}
+        for nombre in hojas_modificadas:
+            path = mapa_gen.get(nombre)
+            if path and path in z_gen.namelist():
+                hojas_nuevas[path] = z_gen.read(path)
+
+    out_buf = BytesIO()
+    with zipfile.ZipFile(BytesIO(xlsm_original)) as z_orig:
+        mapa_orig = _mapa_nombre_a_xml(z_orig)
+        # Verificar que las hojas modificadas tienen el mismo path en
+        # original y generado. Si no coincide, mejor abortar y devolver
+        # el generado tal cual (que tiene las fórmulas pero no los botones).
+        for nombre in hojas_modificadas:
+            if mapa_orig.get(nombre) != mapa_gen.get(nombre):
+                return xlsm_generado  # fallback seguro
+
+        with zipfile.ZipFile(out_buf, "w", zipfile.ZIP_DEFLATED) as z_out:
+            for item in z_orig.namelist():
+                if item in hojas_nuevas:
+                    data = hojas_nuevas[item]
+                else:
+                    data = z_orig.read(item)
+                z_out.writestr(item, data)
+
+    return out_buf.getvalue()
+
+
+def _mapa_nombre_a_xml(zip_obj) -> dict[str, str]:
+    """Lee workbook.xml + rels y devuelve {nombre_hoja: 'xl/worksheets/sheet?.xml'}."""
+    from xml.etree import ElementTree as ET
+
+    try:
+        wb_xml = zip_obj.read("xl/workbook.xml")
+        rels_xml = zip_obj.read("xl/_rels/workbook.xml.rels")
+    except KeyError:
+        return {}
+
+    ns_main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    ns_r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    ns_rels = "http://schemas.openxmlformats.org/package/2006/relationships"
+
+    rels_root = ET.fromstring(rels_xml)
+    rid_to_target: dict[str, str] = {}
+    for rel in rels_root.iter(f"{{{ns_rels}}}Relationship"):
+        rid_to_target[rel.attrib["Id"]] = rel.attrib.get("Target", "")
+
+    wb_root = ET.fromstring(wb_xml)
+    out: dict[str, str] = {}
+    for sheet in wb_root.iter(f"{{{ns_main}}}sheet"):
+        name = sheet.attrib.get("name", "")
+        rid = sheet.attrib.get(f"{{{ns_r}}}id", "")
+        target = rid_to_target.get(rid, "").lstrip("/")
+        if target and not target.startswith("xl/"):
+            target = "xl/" + target
+        if name and target:
+            out[name] = target
+    return out
+
+
 def _inyectar_cached_values_hoja1(xlsm_bytes: bytes, membretes: list[dict]) -> bytes:
     """Modifica el XML del .xlsm para que cada fórmula `=Membretes!XR` en
     Hoja1 tenga su `<v>VALOR</v>` cacheado. Así Excel muestra los datos
@@ -1378,6 +1458,31 @@ def correr(
 
     buffer = BytesIO()
     wb.save(buffer)
+
+    # ── Cirugía XML ─────────────────────────────────────────────────────
+    # openpyxl rompe los drawings, ActiveX, ctrlProps y rels de hojas al
+    # guardar .xlsm con botones de macro. Para preservarlos, mergeamos:
+    # del archivo original tomamos TODO (incluyendo drawings, controles,
+    # VBA bindings), y solo sobrescribimos los XMLs de las hojas que
+    # realmente modificamos (Planilla cobro, Trabajo*, Derivaciones).
+    buffer = BytesIO(
+        _preservar_recursos_del_original(
+            xlsm_generado=buffer.getvalue(),
+            xlsm_original=xlsm_bytes,
+            hojas_modificadas=[
+                "Planilla cobro",
+                "Planilla Trabajo Hemograma",
+                "Planilla trabajo química",
+                "Planilla Orinas",
+                "Planilla Coagulograma",
+                "Planilla Serología",
+                "Planilla Hemoparásitos",
+                "Planilla VetCheck",
+                "Planilla hematología",
+                "Derivaciones",
+            ],
+        )
+    )
 
     metricas = {
         "modo": modo,
