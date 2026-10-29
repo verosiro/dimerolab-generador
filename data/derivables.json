@@ -2,7 +2,7 @@
   "_doc": "Lista de estudios que se derivan. Clave = nombre del estudio (case/tilde-insensitive), valor = destino. Cuando un estudio del día matchea, además de Planilla cobro se agrega a Planilla Derivaciones del .xlsm. 'EN EL LABO' = se imprime papel pero no sale del labo. Fuente: DERIVACIONES.xlsx del Drive (2026-05-26).",
   "derivables": {
     "Ácido úrico": "RAPELA",
-    "Ácidos Biliares": "TCBA",
+    "Ácidos Biliares": "RAPELA",
     "Ferremia": "TCBA",
     "Hemoglobina glicosidada": "DIAGNOTEST",
     "Magnesio": "TCBA",
